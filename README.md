@@ -8,7 +8,7 @@ Watch kubernetes resources and print the delta in changes.
 
 ## Example
 
-```
+```bash
 # Watch all resources and print diffs
 wtfk8s
 
