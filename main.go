@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ibuildthecloud/wtfk8s/pkg/differ"
@@ -17,8 +17,13 @@ import (
 	"github.com/rancher/wrangler/pkg/signals"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 )
 
@@ -47,6 +52,19 @@ func mainErr() error {
 
 	ctx := signals.SetupSignalContext()
 	restConfig := kubeconfig.GetNonInteractiveClientConfigWithContext(*kubeConfig, *kcontext)
+
+	// create the dynamic client from kubeconfig
+	//kconfig, _ := restConfig.ClientConfig()
+	kubeConfigPath := filepath.Join("/root", ".kube", "config")
+	fmt.Printf("Using kubeconfig: %s\n", kubeConfigPath)
+	kubeConfig, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
+	if err != nil {
+		return err
+	}
+	dynamicClient, err := dynamic.NewForConfig(kubeConfig)
+	if err != nil {
+		return err
+	}
 
 	clients, err := clients.New(restConfig, &generic.FactoryOptions{
 		Namespace: *namespace,
@@ -93,7 +111,7 @@ func mainErr() error {
 	time.Sleep(5 * time.Second)
 	for _, g := range watcher.GvkList() {
 		klog.V(1).Infof("add gvk %v", g)
-		err := getResourceList(watcher, clients, *namespace, g)
+		err := getResourceList(watcher, clients, *namespace, g, dynamicClient)
 		if err != nil {
 			klog.Error(err.Error())
 		}
@@ -103,7 +121,7 @@ func mainErr() error {
 	return nil
 }
 
-func getResourceList(w *watcher.Watcher, c *clients.Clients, namespace string, gvk schema.GroupVersionKind) error {
+func getResourceList(w *watcher.Watcher, c *clients.Clients, namespace string, gvk schema.GroupVersionKind, client dynamic.Interface) error {
 	mapper, err := c.ToRESTMapper()
 	if err != nil {
 		return err
@@ -137,10 +155,19 @@ func getResourceList(w *watcher.Watcher, c *clients.Clients, namespace string, g
 		if w.MatchFilters(obj) {
 			metadata.SetNamespace("okd-1")
 			metadata.SetResourceVersion("")
+			metadata.SetManagedFields([]metav1.ManagedFieldsEntry{})
 
-			//_, err = c.Dynamic.Update(obj)
-			a, _ := json.Marshal(obj)
-			_, err := c.CachedDiscovery.RESTClient().Put().Namespace("okd-1").Body(a).Do(context.TODO()).Get()
+			m, _ := w.Mapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+			unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+			if err != nil {
+				return err
+			}
+			klog.Infof("%v", unstructuredObj)
+
+			_, err = client.
+				Resource(m.Resource).
+				Create(context.TODO(), &unstructured.Unstructured{Object: unstructuredObj}, metav1.CreateOptions{})
+
 			if err != nil {
 				return err
 			}

@@ -35,6 +35,10 @@ func (w Watcher) Dynamic() *dynamic.Controller {
 	return w.dynamic
 }
 
+func (w Watcher) Mapper() meta.RESTMapper {
+	return w.mapper
+}
+
 func (w Watcher) GvkList() []schema.GroupVersionKind {
 	return w.gvkList
 }
