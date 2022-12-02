@@ -69,8 +69,6 @@ func (d *Differ) Print(obj runtime.Object) error {
 		return err
 	}
 
-	klog.Info("patch", patch)
-
 	if string(patch) != "{}" {
 		klog.Infof("update version: %s, gvr: %s, diff: %s", meta.GetResourceVersion(), printKey, string(patch))
 	}

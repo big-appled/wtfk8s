@@ -54,7 +54,7 @@ func main() {
 }
 
 func mainErr() error {
-
+	newNs := "okd-1"
 	ctx := signals.SetupSignalContext()
 	restConfig := kubeconfig.GetNonInteractiveClientConfigWithContext(*kubeConfig, *kcontext)
 
@@ -101,6 +101,7 @@ func mainErr() error {
 			if err != nil {
 				klog.Error(err.Error())
 			}
+			err = applyResourceList(watcher, clients, newNs, []runtime.Object{obj}, dynamicClient)
 		}
 	}()
 
@@ -113,8 +114,8 @@ func mainErr() error {
 
 	time.Sleep(5 * time.Second)
 	for _, g := range watcher.GvkList() {
-		klog.V(1).Infof("add gvk %v", g)
-		err := applyResourceList(watcher, clients, *namespace, "okd-1", g, dynamicClient)
+		klog.Infof("add gvk %v", g)
+		err := initResourceList(watcher, clients, *namespace, newNs, g, dynamicClient)
 		if err != nil {
 			klog.Error(err.Error())
 		}
@@ -124,14 +125,22 @@ func mainErr() error {
 	return nil
 }
 
-func applyResourceList(w *watcher.Watcher, c *clients.Clients, namespace, newNamespace string, gvk schema.GroupVersionKind, client dynamic.Interface) error {
+func initResourceList(w *watcher.Watcher, c *clients.Clients, namespace, newNamespace string, gvk schema.GroupVersionKind, client dynamic.Interface) error {
+	objs, err := listGvkResources(c, namespace, gvk)
+	if err != nil {
+		return nil
+	}
+	return applyResourceList(w, c, newNamespace, objs, client)
+}
+
+func listGvkResources(c *clients.Clients, namespace string, gvk schema.GroupVersionKind) ([]runtime.Object, error) {
 	mapper, err := c.ToRESTMapper()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ns := namespace
 	switch mapping.Scope.Name() {
@@ -139,23 +148,29 @@ func applyResourceList(w *watcher.Watcher, c *clients.Clients, namespace, newNam
 	case meta.RESTScopeNameRoot:
 		//ns = ""
 		// TODO
-		return nil
+		return nil, nil
 	default:
 
 	}
 	objs, err := c.Dynamic.List(gvk, ns, labels.Everything())
 	if err != nil {
-		return err
+		return nil, err
 	}
+	return objs, nil
+}
 
+func applyResourceList(w *watcher.Watcher, c *clients.Clients, newNamespace string, objs []runtime.Object, client dynamic.Interface) error {
 	klog.V(1).Infof("count %d", len(objs))
 	for _, obj := range objs {
 		if w.MatchFilters(obj) {
-			m, err := w.Mapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+			gk := obj.GetObjectKind().GroupVersionKind()
+			klog.Info("gk", gk)
+			m, err := w.Mapper().RESTMapping(gk.GroupKind(), gk.Version)
 			if err != nil {
+				klog.Error(err.Error())
 				return err
 			}
-			err = apply(client, m, obj, gvk, newNamespace)
+			err = apply(client, m, obj, newNamespace)
 			if err != nil {
 				return err
 			}
@@ -164,7 +179,8 @@ func applyResourceList(w *watcher.Watcher, c *clients.Clients, namespace, newNam
 	return nil
 }
 
-func apply(client dynamic.Interface, m *meta.RESTMapping, obj runtime.Object, gvk schema.GroupVersionKind, newNamespace string) error {
+func apply(client dynamic.Interface, m *meta.RESTMapping, obj runtime.Object, newNamespace string) error {
+	gvk := m.GroupVersionKind
 	metadata, err := meta.Accessor(obj)
 	if err != nil {
 		return err
