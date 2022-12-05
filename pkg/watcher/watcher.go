@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ibuildthecloud/wtfk8s/pkg/rsconst"
 	"github.com/rancher/lasso/pkg/dynamic"
 	"github.com/rancher/wrangler/pkg/clients"
 	"github.com/rancher/wrangler/pkg/kv"
@@ -237,30 +238,21 @@ func skipName(obj runtime.Object) bool {
 }
 
 func (w *Watcher) apply(obj runtime.Object) error {
-	finalizerName := "test-fff/dr"
 	metadata, err := meta.Accessor(obj)
 	if err != nil {
 		return err
 	}
 
 	f := metadata.GetFinalizers()
-	if f == nil || !sets.NewString(f...).Has(finalizerName) {
+	if f == nil || !sets.NewString(f...).Has(rsconst.FinalizerName) {
 		if f == nil {
 			f = []string{}
 		}
-		metadata.SetFinalizers(append(f, finalizerName))
+		metadata.SetFinalizers(append(f, rsconst.FinalizerName))
+		klog.Infof("add finalizer to %s", metadata.GetName())
+		_, err = w.dynamic.Update(obj)
+		return err
 	}
 
-	d := metadata.GetDeletionTimestamp()
-	if d != nil {
-		if f != nil {
-			n := sets.NewString(f...).Delete(finalizerName).List()
-			metadata.SetFinalizers(n)
-		}
-	}
-
-	klog.Info("start update")
-	_, err = w.dynamic.Update(obj)
-	klog.Info("stop update, %v", obj)
-	return err
+	return nil
 }
