@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	corev1 "k8s.io/api/core/v1"
+	rbac "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -21,7 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	//"sigs.k8s.io/controller-runtime/pkg/client"
+	//af "k8s.io/client-go/applyconfigurations/rbac/v1"
 )
 
 type WClient struct {
@@ -225,11 +227,12 @@ func apply(client dynamic.Interface, m *meta.RESTMapping, obj runtime.Object, ne
 }
 
 func create(client dynamic.Interface, m *meta.RESTMapping, obj runtime.Object, metadata metav1.Object, newNamespace string) error {
+	oldNs := metadata.GetNamespace()
 	metadata.SetNamespace(newNamespace)
 	metadata.SetResourceVersion("")
 	metadata.SetManagedFields([]metav1.ManagedFieldsEntry{})
 
-	newObj := specialHandle(obj, m)
+	newObj := specialHandle(client, obj, m, false, oldNs)
 	if newObj == nil {
 		return nil
 	}
@@ -253,8 +256,8 @@ func patch(client dynamic.Interface, m *meta.RESTMapping, obj, existObj runtime.
 		return err
 	}
 
-	//newObj := existObj.DeepCopyObject()
-	newMetadata, err := meta.Accessor(obj)
+	tmpObj := obj.DeepCopyObject()
+	newMetadata, err := meta.Accessor(tmpObj)
 	if err != nil {
 		return err
 	}
@@ -278,7 +281,10 @@ func patch(client dynamic.Interface, m *meta.RESTMapping, obj, existObj runtime.
 	// fetch ns
 	newMetadata.SetNamespace(oldMetadata.GetNamespace())
 
-	newObj := specialHandle(obj, m)
+	newObj := specialHandle(client, tmpObj, m, true, metadata.GetNamespace())
+	if newObj == nil {
+		return nil
+	}
 	klog.V(2).Info("new obj", newObj)
 
 	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(newObj)
@@ -291,20 +297,20 @@ func patch(client dynamic.Interface, m *meta.RESTMapping, obj, existObj runtime.
 	return err
 }
 
-func specialHandle(obj runtime.Object, m *meta.RESTMapping) runtime.Object {
+func specialHandle(client dynamic.Interface, obj runtime.Object, m *meta.RESTMapping, update bool, oldNs string) runtime.Object {
 	switch m.GroupVersionKind.Kind {
 	case "Service": // service
 		a := obj.(*corev1.Service)
 		a.Spec.ClusterIP = ""
 		a.Spec.ClusterIPs = []string{}
-		a.Kind = "Service"
-		a.APIVersion = "v1"
+		//a.Kind = "Service"
+		//a.APIVersion = "v1"
 		for i, p := range a.Spec.Ports {
 			if p.NodePort != 0 {
 				a.Spec.Ports[i].NodePort = 0
 			}
 		}
-		return typeToRuntimeObj(obj, m, a)
+		return a
 	case "Secret":
 		a := obj.(*corev1.Secret)
 		annotations := a.GetAnnotations()
@@ -317,14 +323,26 @@ func specialHandle(obj runtime.Object, m *meta.RESTMapping) runtime.Object {
 	case "ServiceAccount":
 		a := obj.(*corev1.ServiceAccount)
 		a.Secrets = nil
-		return typeToRuntimeObj(obj, m, a)
+		a.Kind = "ServiceAccount"
+		//a.APIVersion = "v1"
+		err := getClusterRoleBindings(client, oldNs, a.Name, a.Kind, a.Namespace)
+		if err != nil {
+			klog.Error(err.Error())
+			return obj
+		}
+		if update {
+			return nil
+		} else {
+			//getClusterRoleBindings(client, a.Namespace, a.Name, a.Kind)
+			return a
+		}
 	default:
 	}
 
 	return obj
 }
 
-func typeToRuntimeObj(obj runtime.Object, m *meta.RESTMapping, a client.Object) runtime.Object {
+func TypeToRuntimeObj(obj runtime.Object, m *meta.RESTMapping, a runtime.Object) runtime.Object {
 	scheme := runtime.NewScheme()
 	scheme.AddKnownTypes(m.Resource.GroupVersion(), obj)
 	decoder := serializer.NewCodecFactory(scheme).UniversalDeserializer()
@@ -339,4 +357,39 @@ func typeToRuntimeObj(obj runtime.Object, m *meta.RESTMapping, a client.Object) 
 		return obj
 	}
 	return runtimeObject
+}
+
+func getClusterRoleBindings(client dynamic.Interface, ns, sa string, kind string, newNs string) error {
+	o, err := client.Resource(rbac.SchemeGroupVersion.WithResource("clusterrolebindings")).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		klog.Error(err.Error())
+	}
+
+	for _, b := range o.Items {
+		var crb rbac.ClusterRoleBinding
+		err = runtime.DefaultUnstructuredConverter.
+			FromUnstructured(b.Object, &crb)
+		if err != nil {
+			klog.Error(err.Error())
+		}
+
+		for _, s := range crb.Subjects {
+			if s.Name == sa && s.Namespace == ns && s.Kind == kind {
+				klog.V(1).Infof("find cluster role binding for sa: %s, %v", sa, crb)
+				crb.Subjects = append(crb.Subjects, rbac.Subject{Name: sa, Namespace: newNs, Kind: kind})
+				unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&crb)
+
+				//t, err := af.ExtractClusterRoleBinding(&crb, "sync/update")
+				if err != nil {
+					return err
+				}
+
+				_, err = client.Resource(rbac.SchemeGroupVersion.WithResource("clusterrolebindings")).Update(context.TODO(), &unstructured.Unstructured{Object: unstructuredObj}, metav1.UpdateOptions{FieldManager: "sync/update"})
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
