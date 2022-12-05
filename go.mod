@@ -7,9 +7,11 @@ require (
 	github.com/rancher/lasso v0.0.0-20221123202929-d33a7d8ffce9
 	github.com/rancher/wrangler v1.0.0
 	github.com/sirupsen/logrus v1.9.0
+	k8s.io/api v0.25.4
 	k8s.io/apimachinery v0.25.4
 	k8s.io/client-go v0.25.4
 	k8s.io/klog/v2 v2.80.1
+	sigs.k8s.io/controller-runtime v0.10.1
 )
 
 require (
@@ -54,7 +56,6 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/api v0.25.4 // indirect
 	k8s.io/apiextensions-apiserver v0.25.0 // indirect
 	k8s.io/klog v1.0.0 // indirect
 	k8s.io/kube-aggregator v0.24.0 // indirect

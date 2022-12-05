@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type WClient struct {
@@ -229,6 +230,9 @@ func create(client dynamic.Interface, m *meta.RESTMapping, obj runtime.Object, m
 	metadata.SetManagedFields([]metav1.ManagedFieldsEntry{})
 
 	newObj := specialHandle(obj, m)
+	if newObj == nil {
+		return nil
+	}
 	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(newObj)
 	if err != nil {
 		return err
@@ -300,22 +304,39 @@ func specialHandle(obj runtime.Object, m *meta.RESTMapping) runtime.Object {
 				a.Spec.Ports[i].NodePort = 0
 			}
 		}
-
-		scheme := runtime.NewScheme()
-		scheme.AddKnownTypes(m.Resource.GroupVersion(), obj)
-		decoder := serializer.NewCodecFactory(scheme).UniversalDeserializer()
-		b, err := json.Marshal(a)
-		if err != nil {
-			klog.Error(err.Error())
-			return obj
+		return typeToRuntimeObj(obj, m, a)
+	case "Secret":
+		a := obj.(*corev1.Secret)
+		annotations := a.GetAnnotations()
+		if annotations != nil {
+			_, ok := annotations["kubernetes.io/service-account.name"]
+			if ok {
+				return nil
+			}
 		}
-		runtimeObject, _, err := decoder.Decode(b, nil, nil)
-		if err != nil {
-			klog.Error(err.Error())
-			return obj
-		}
-		return runtimeObject
+	case "ServiceAccount":
+		a := obj.(*corev1.ServiceAccount)
+		a.Secrets = nil
+		return typeToRuntimeObj(obj, m, a)
 	default:
 	}
+
 	return obj
+}
+
+func typeToRuntimeObj(obj runtime.Object, m *meta.RESTMapping, a client.Object) runtime.Object {
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypes(m.Resource.GroupVersion(), obj)
+	decoder := serializer.NewCodecFactory(scheme).UniversalDeserializer()
+	b, err := json.Marshal(a)
+	if err != nil {
+		klog.Error(err.Error())
+		return obj
+	}
+	runtimeObject, _, err := decoder.Decode(b, nil, nil)
+	if err != nil {
+		klog.Error(err.Error())
+		return obj
+	}
+	return runtimeObject
 }
