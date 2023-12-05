@@ -2,7 +2,6 @@ package differ
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	jsonpatch "github.com/evanphx/json-patch"
@@ -10,6 +9,7 @@ import (
 	"github.com/rancher/wrangler/pkg/gvk"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/klog/v2"
 )
 
 type Differ struct {
@@ -29,6 +29,7 @@ func New(clients *clients.Clients) (*Differ, error) {
 }
 
 func (d *Differ) Print(obj runtime.Object) error {
+	klog.Info("enter diff")
 	key, err := key(obj)
 	if err != nil {
 		return err
@@ -43,6 +44,7 @@ func (d *Differ) Print(obj runtime.Object) error {
 	d.cache[key] = obj
 
 	if !ok || meta.GetResourceVersion() == "" {
+		klog.Info("wrong obj", ok, meta.GetResourceVersion())
 		return nil
 	}
 
@@ -58,6 +60,7 @@ func (d *Differ) Print(obj runtime.Object) error {
 
 	patch, err := jsonpatch.CreateMergePatch(oldBytes, newBytes)
 	if err != nil {
+		klog.Error(err.Error())
 		return err
 	}
 
@@ -67,7 +70,7 @@ func (d *Differ) Print(obj runtime.Object) error {
 	}
 
 	if string(patch) != "{}" {
-		fmt.Printf("%s %s %s\n", meta.GetResourceVersion(), printKey, patch)
+		klog.Infof("update version: %s, gvr: %s, diff: %s", meta.GetResourceVersion(), printKey, string(patch))
 	}
 
 	return nil
